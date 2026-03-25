@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { convertToUSD } from '../lib/currency';
 import { triggerGHLWebhook } from '../lib/ghl';
-import { notifySaleSubmitted } from '../lib/notifications';
+import { notifyOnboardingSubmitted } from '../lib/notifications';
 import { Card, Button, Spinner, Field, Select, Pill } from '../components/ui';
 
 const COUNTRIES = [
@@ -152,7 +152,7 @@ export default function ClientOnboardingView({ appSettings, setActiveTab }) {
       if (error) throw error;
 
       await triggerGHLWebhook('sale_submitted', { ...submissionData, source: 'onboarding' });
-      await notifySaleSubmitted(submissionData.client_name, submissionData.submitted_by);
+      await notifyOnboardingSubmitted(submissionData.client_name, submissionData.submitted_by);
       
       setSubmitted(true);
       window.scrollTo(0, 0);

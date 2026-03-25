@@ -3,7 +3,10 @@ import { Search, ShieldAlert, CheckCircle2, ShieldCheck, Upload, Trash2, FileTex
 import { supabase } from '../lib/supabase';
 import { triggerGHLWebhook } from '../lib/ghl';
 import { useAuth } from '../context/AuthContext';
-import { notifyQAPassed, notifyQAFailed } from '../lib/notifications';
+import { 
+  notifyQAPassed, notifyQAFailed, 
+  notifyOnboardingPassed, notifyOnboardingFailed 
+} from '../lib/notifications';
 import { Button, Card, Pill, Spinner, Select, Field } from '../components/ui';
 
 export default function AuditQueueView({ appSettings }) {
@@ -42,8 +45,8 @@ export default function AuditQueueView({ appSettings }) {
     <div className="space-y-6">
       <div className="page-header">
         <div>
-          <h1 className="page-title">QA Audit & Validation</h1>
-          <p className="page-subtitle">Process incoming sales and review historical audits.</p>
+          <h1 className="page-title">Audit & Validation</h1>
+          <p className="page-subtitle">Process incoming sales/onboardings and review historical records.</p>
         </div>
       </div>
 
@@ -107,7 +110,6 @@ export default function AuditQueueView({ appSettings }) {
         </div>
       </Card>
 
-      {/* Embedded Render of the Modal */}
       {auditModal && (
         <AuditFormModal 
           submission={auditModal} 
@@ -125,7 +127,6 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
   const isReadOnly = submission.status !== 'pending';
   const [actioning, setActioning] = useState(false);
   
-  // Form State matching screenshot
   const [auditor, setAuditor] = useState(profile?.full_name || '');
   const [qaDate, setQaDate] = useState(new Date().toISOString().split('T')[0]);
   const [score, setScore] = useState('');
@@ -135,7 +136,6 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
   const [recording, setRecording] = useState('');
   const [decision, setDecision] = useState('');
   
-  // Assignment State (Required if Pass)
   const [am, setAm] = useState('');
   const [pm, setPm] = useState('');
   
@@ -153,7 +153,6 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
     if (actioning) return;
     setActioning(true);
 
-    // Re-verify status to prevent race conditions
     const { data: currentSub } = await supabase.from('submissions').select('status, client_id').eq('id', submission.id).single();
     if (currentSub?.status !== 'pending') {
       alert("This submission has already been processed.");
@@ -163,14 +162,13 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
 
     const isPassing = decision === 'Pass';
     const finalStatus = isPassing ? 'passed' : 'failed';
-
-    const fullNotes = `Score: ${score}\nCommitments Verified: ${commitments}\nRecording: ${recording}\nReport: ${reportUrl}\nNotes: ${notes}`;
+    const businessName = submission.business_name || submission.client_name;
 
     const { error: subErr } = await supabase.from('submissions').update({
       status: finalStatus
     }).eq('id', submission.id);
 
-    const { error: auditErr } = await supabase.from('qa_audits').insert({
+    await supabase.from('qa_audits').insert({
       submission_id: submission.id,
       auditor_id: profile.id,
       auditor_name: auditor,
@@ -185,19 +183,20 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
       assigned_pm: pm
     });
 
-    if (auditErr) console.error("Audit Insert Error:", auditErr);
-
     if (finalStatus === 'failed') {
-      await triggerGHLWebhook('sale_failed_audit', { ...submission, audit_notes: fullNotes, audited_by: auditor });
-      await notifyQAFailed({ clientName: submission.client_name, repName: submission.rep, closerName: submission.closer });
+      if (submission.is_onboarding) {
+        await notifyOnboardingFailed({ clientName: businessName, amPmName: submission.collected_by });
+      } else {
+        await notifyQAFailed({ clientName: businessName, repName: submission.rep, closerName: submission.closer });
+      }
+      await triggerGHLWebhook('sale_failed_audit', { ...submission, audited_by: auditor });
     }
 
     if (finalStatus === 'passed') {
       let mClientId = currentSub.client_id;
-      const businessName = submission.business_name || submission.client_name;
+      const assignedTeam = staff.ams.find(a => a.name === am)?.team || staff.pms.find(p => p.name === pm)?.team || 'N/A';
 
       if (!mClientId) {
-          // 1. HARDENED CLIENT MATCHING: Check by Email or exact Business Name
           const { data: existingC } = await supabase.from('clients')
             .select('id')
             .or(`email.eq.${submission.email},business_name.eq.${businessName}`)
@@ -205,9 +204,7 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
 
           if (existingC) {
              mClientId = existingC.id;
-             console.log("Matched existing client during audit:", mClientId);
           } else {
-            const assignedTeam = staff.ams.find(a => a.name === am)?.team || staff.pms.find(p => p.name === pm)?.team || 'N/A';
             const { data: newC, error: clientErr } = await supabase.from('clients').insert({
               client_name: submission.client_name, 
               business_name: businessName,
@@ -216,27 +213,18 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
               website: submission.website,
               address: submission.address, 
               country: submission.country, 
-              source: 'onboarding',
+              source: submission.is_onboarding ? 'onboarding' : 'sales',
               team: assignedTeam
             }).select().single();
-            if (clientErr) console.error("Client Creation Error:", clientErr);
             if (newC) mClientId = newC.id;
           }
       }
       
-      const assignedTeam = staff.ams.find(a => a.name === am)?.team || staff.pms.find(p => p.name === pm)?.team || 'N/A';
-      
-      // 2. HARDENED PROJECT MATCHING: Check if project already exists for this client
       let mProjectId = null;
-      const { data: existingProj } = await supabase.from('projects')
-        .select('id')
-        .eq('client_id', mClientId)
-        .eq('client_name', businessName)
-        .maybeSingle();
+      const { data: existingProj } = await supabase.from('projects').select('id').eq('submission_id', submission.id).maybeSingle();
         
       if (existingProj) {
         mProjectId = existingProj.id;
-        console.log("Matched existing project during audit:", mProjectId);
       } else {
         const { data: newProj, error: projErr } = await supabase.from('projects').insert({
             client_id: mClientId, 
@@ -244,78 +232,59 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
             assigned_am: am, 
             assigned_pm: pm,
             status: 'active',
-            team: assignedTeam
+            team: assignedTeam,
+            submission_id: submission.id
         }).select().single();
-        if (projErr) console.error("Project Creation Error:", projErr);
-        if (newProj) mProjectId = newProj.id;
+        
+        if (projErr && projErr.code === '23505') {
+            const { data: retryProj } = await supabase.from('projects').select('id').eq('submission_id', submission.id).maybeSingle();
+            if (retryProj) mProjectId = retryProj.id;
+        } else if (newProj) {
+            mProjectId = newProj.id;
+        }
       }
 
-      // 3. HARDENED SERVICE MATCHING: Check if this service is already logged for this project today (to prevent duplicates)
       let newServiceId = null;
-      const { data: existingService } = await supabase.from('project_services')
-        .select('id')
-        .eq('project_id', mProjectId)
-        .eq('service_name', submission.product)
-        .eq('net_value', submission.net)
-        .gte('created_at', new Date().toISOString().split('T')[0])
-        .maybeSingle();
-
-      if (existingService) {
-        newServiceId = existingService.id;
-        console.log("Matched existing service during audit:", newServiceId);
-      } else {
-        const { data: newService, error: serviceErr } = await supabase.from('project_services').insert({
-            project_id: mProjectId,
-            service_name: submission.product,
-            gross_value: submission.gross,
-            net_value: submission.net,
-            currency: submission.currency || 'USD',
-            status: 'active'
-        }).select().single();
-        if (serviceErr) console.error("Service Creation Error:", serviceErr);
-        if (newService) newServiceId = newService.id;
-      }
+      const { data: newService } = await supabase.from('project_services').insert({
+          project_id: mProjectId,
+          service_name: submission.product,
+          gross_value: submission.gross,
+          net_value: submission.net,
+          currency: submission.currency || 'USD',
+          status: 'active'
+      }).select().single();
+      if (newService) newServiceId = newService.id;
 
       if (mProjectId) await supabase.from('submissions').update({ project_id: mProjectId, client_id: mClientId }).eq('id', submission.id);
 
-      // 4. REVENUE LEVEL: Log onboarding revenue if applicable, with duplicate check
       if (submission.is_onboarding) {
-        const { data: existingLedger } = await supabase.from('revenue_ledger')
-          .select('id')
-          .eq('project_id', mProjectId)
-          .eq('service_id', newServiceId)
-          .maybeSingle();
-
-        if (!existingLedger) {
-          await supabase.from('revenue_ledger').insert({
+        const { error: revErr } = await supabase.from('revenue_ledger').insert({
             project_id: mProjectId,
             client_id: mClientId,
             client_name: businessName,
+            amount_usd: submission.usd_net || submission.net,
+            original_amount: submission.net,
+            currency: submission.currency,
             logged_by: profile.full_name,
             logged_by_id: profile.id,
             collected_by: submission.collected_by,
-            currency: submission.currency || 'USD',
-            original_amount: Number(submission.net || 0),
-            amount_usd: Number(submission.usd_net || submission.net || 0),
-            payment_date: submission.sale_date,
+            payment_date: new Date().toISOString().split('T')[0],
             payment_type: 'Onboarding',
             product: submission.product,
-            service_id: newServiceId,
-            notes: 'Verified Onboarding Revenue'
-          });
-        }
+            is_onboarding: true,
+            locked: true
+        });
+        if (revErr) console.error("Onboarding Revenue Error:", revErr);
       }
+
+      const notifyPayload = { clientName: businessName, repName: submission.rep, closerName: submission.closer, amName: am, pmName: pm, teamName: assignedTeam, projectId: mProjectId };
       
-      await triggerGHLWebhook('sale_passed_audit', { ...submission, assigned_am: am, assigned_pm: pm });
-      await notifyQAPassed({
-         clientName: submission.client_name,
-         repName: submission.rep,
-         closerName: submission.closer,
-         amName: am,
-         pmName: pm,
-         teamName: assignedTeam,
-         projectId: mProjectId
-      });
+      if (submission.is_onboarding) {
+        await notifyOnboardingPassed({ clientName: businessName, amPmName: submission.collected_by, teamName: assignedTeam });
+      } else {
+        await notifyQAPassed(notifyPayload);
+      }
+      await triggerGHLWebhook('sale_passed_audit', notifyPayload);
     }
 
     setActioning(false);
@@ -344,156 +313,98 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
                        <Pill status={auditData.decision === 'Pass' ? 'passed' : 'failed'} />
                     </div>
                  </div>
- 
+
                  <div className="grid-2">
                     <Card title="Sales Context">
                        <div className="space-y-3" style={{ fontSize: '0.875rem' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-3)' }}>Product</span> <strong>{submission.product}</strong></div>
                           <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-3)' }}>Representative</span> <strong>{submission.rep}</strong></div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-3)' }}>Gross Value</span> <strong>{submission.currency} {submission.gross}</strong></div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-3)' }}>Report Link</span> {auditData.audit_report_url ? <a href={auditData.audit_report_url} target="_blank" rel="noreferrer" style={{ color: 'var(--blue)', textDecoration: 'underline' }}>View Document</a> : '—'}</div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-3)' }}>Recording</span> {auditData.recording_url ? <a href={auditData.recording_url} target="_blank" rel="noreferrer" style={{ color: 'var(--blue)', textDecoration: 'underline' }}>Listen to Call</a> : '—'}</div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-3)' }}>Gross</span> <strong>{submission.currency} {submission.gross}</strong></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-3)' }}>Report Link</span> {auditData.audit_report_url ? <a href={auditData.audit_report_url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>View Document</a> : '—'}</div>
                        </div>
                     </Card>
                     
-                    <Card title="Audit Diagnostics" style={{ background: auditData.decision === 'Pass' ? '#f0fdf4' : '#fef2f2', borderColor: auditData.decision === 'Pass' ? '#bbf7d0' : '#fecaca' }}>
+                    <Card title="Diagnostics" style={{ background: auditData.decision === 'Pass' ? 'var(--green-glow)' : 'var(--red-glow)', borderColor: auditData.decision === 'Pass' ? 'var(--green)' : 'var(--red)' }}>
                        <div className="space-y-4" style={{ fontSize: '0.875rem' }}>
-                          <div style={{ background: '#fff', padding: '12px 16px', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
-                             <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginBottom: 2 }}>Grading Score</div>
-                             <div style={{ fontWeight: 800, color: (auditData.score?.includes('10/10') || auditData.score?.includes('8/10')) ? 'var(--green)' : 'var(--red)' }}>{auditData.score}</div>
+                          <div style={{ background: '#fff', padding: '12px 16px', borderRadius: 8, border: '1px solid var(--border)' }}>
+                             <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginBottom: 2 }}>Score</div>
+                             <div style={{ fontWeight: 800 }}>{auditData.score}</div>
                           </div>
-                          <div style={{ background: '#fff', padding: '12px 16px', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
-                             <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginBottom: 2 }}>Commitments Verified</div>
-                             <div style={{ fontWeight: 800 }}>{auditData.commitments_verified ? '✅ Yes' : '❌ No'}</div>
+                          <div style={{ background: '#fff', padding: '12px 16px', borderRadius: 8, border: '1px solid var(--border)' }}>
+                             <div style={{ fontSize: '0.75rem', color: 'var(--text-3)', marginBottom: 2 }}>Verified</div>
+                             <div style={{ fontWeight: 800 }}>{auditData.commitments_verified ? 'Yes' : 'No'}</div>
                           </div>
                        </div>
                     </Card>
                  </div>
- 
-                 <Card title="Detailed Auditor Notes">
-                    <div style={{ whiteSpace: 'pre-wrap', fontSize: '0.875rem', lineHeight: 1.6, color: 'var(--text-2)' }}>
-                       {auditData.notes || 'No extensive notes provided.'}
-                    </div>
+
+                 <Card title="Notes">
+                    <div style={{ fontSize: '0.875rem', whiteSpace: 'pre-wrap' }}>{auditData.notes || 'No notes.'}</div>
                  </Card>
               </div>
-             ) : (
-              <div style={{ textAlign: 'center', padding: '40px 20px' }}>
-                <Spinner size="lg" />
-                <p style={{ marginTop: 16, color: 'var(--text-3)' }}>Fetching historical audit data...</p>
-                <div style={{ marginTop: 24, padding: 16, background: '#fffbeb', border: '1px solid #fef3c7', borderRadius: 8, fontSize: '0.875rem', color: '#92400e' }}>
-                  If this takes more than a few seconds, it's possible this record was processed before the audit tracking system was fully online.
-                </div>
-              </div>
-             )
-           ) : (
-          <form onSubmit={handleSubmit} className="space-y-6" style={{ background: '#fff', padding: 40, borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-sm)', border: '1px solid var(--border)' }}>
-            
-            {/* Embedded Submission Context */}
-            <div style={{ padding: 16, background: 'var(--surface-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', fontSize: '0.875rem', marginBottom: 32 }}>
-              <div style={{ fontWeight: 800, marginBottom: 8, color: 'var(--text-2)' }}>Sales Submission Context</div>
+             ) : <Spinner />
+          ) : (
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div style={{ padding: 16, background: 'var(--surface-2)', borderRadius: 8, border: '1px solid var(--border)', fontSize: '0.875rem' }}>
               <div className="grid-2">
                 <div><strong>Product:</strong> {submission.product}</div>
-                <div><strong>Rep:</strong> {submission.rep}</div>
-                <div><strong>Gross:</strong> {submission.currency} {submission.gross}</div>
-                <div><strong>Net:</strong> {submission.currency} {submission.net}</div>
+                <div><strong>Rep/Collector:</strong> {submission.rep}</div>
               </div>
-              <Field label="Deliverables & Remarks" textarea rows={4} value={submission.sales_remarks} readOnly />
             </div>
 
-            <Field label="Client Name *" value={submission.client_name} disabled />
+            <Field label="Client Name" value={submission.client_name} disabled />
             
             <div className="grid-2">
-              <Field label="Client Phone *" value={submission.phone} disabled />
-              <Field label="Email *" value={submission.email} disabled />
-            </div>
-
-            <div className="grid-2">
-              <Select label="QA Auditor Name *" value={auditor} onChange={e => setAuditor(e.target.value)} required disabled={isReadOnly}>
+              <Select label="Auditor *" value={auditor} onChange={e => setAuditor(e.target.value)} required>
                 <option value="">Select Auditor</option>
                 {staff.qas.map(s => <option key={s} value={s}>{s}</option>)}
               </Select>
-              <Field label="QA Date *" type="date" value={qaDate} onChange={e => setQaDate(e.target.value)} required disabled={isReadOnly} />
+              <Field label="Date *" type="date" value={qaDate} onChange={e => setQaDate(e.target.value)} required />
             </div>
 
-            <Select label="QA Score *" value={score} onChange={e => setScore(e.target.value)} required disabled={isReadOnly}>
+            <Select label="Score *" value={score} onChange={e => setScore(e.target.value)} required>
               <option value="">Select Score</option>
               <option value="Excellent (10/10)">Excellent (10/10)</option>
               <option value="Good (8/10)">Good (8/10)</option>
               <option value="Average (5/10)">Average (5/10)</option>
               <option value="Poor (2/10)">Poor (2/10)</option>
-              <option value="Critical Failure (0/10)">Critical Failure (0/10)</option>
             </Select>
 
             <div className="field">
               <label className="label">Commitments Verified *</label>
               <div style={{ display: 'flex', gap: 16 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: isReadOnly ? 'default' : 'pointer' }}>
-                  <input type="radio" name="commitments" value="Yes" checked={commitments === 'Yes'} onChange={e => setCommitments(e.target.value)} disabled={isReadOnly} required /> Yes
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: isReadOnly ? 'default' : 'pointer' }}>
-                  <input type="radio" name="commitments" value="No" checked={commitments === 'No'} onChange={e => setCommitments(e.target.value)} disabled={isReadOnly} required /> No
-                </label>
+                <label><input type="radio" value="Yes" checked={commitments === 'Yes'} onChange={e => setCommitments(e.target.value)} required /> Yes</label>
+                <label><input type="radio" value="No" checked={commitments === 'No'} onChange={e => setCommitments(e.target.value)} required /> No</label>
               </div>
             </div>
 
+            <Field label="QA Notes *" textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)} required />
+            <Field label="Recording Link *" value={recording} onChange={e => setRecording(e.target.value)} required />
+            
             <div className="field">
-              <label className="label">QA Notes / Red Flags *</label>
-              <textarea 
-                className="textarea" 
-                rows={4} 
-                required 
-                value={notes} 
-                onChange={e => setNotes(e.target.value)} 
-                disabled={isReadOnly}
-                style={{ borderColor: notes ? 'var(--border-2)' : '#fca5a5' }}
-              />
-              {!notes && !isReadOnly && <div style={{ color: '#ef4444', fontSize: '0.75rem', marginTop: 4 }}>QA Notes / Red Flags is required</div>}
-            </div>
-
-            <Field label="Audit Report Link" placeholder="Paste link to document (e.g., Google Drive)..." value={reportUrl} onChange={e => setReportUrl(e.target.value)} disabled={isReadOnly} />
-
-            <Field label="Call Recording *" placeholder="Share the recording link" value={recording} onChange={e => setRecording(e.target.value)} required disabled={isReadOnly} />
-
-            <div className="field">
-              <label className="label">QA Decision *</label>
+              <label className="label">Decision *</label>
               <div style={{ display: 'flex', gap: 16 }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: isReadOnly ? 'default' : 'pointer' }}>
-                  <input type="radio" name="decision" value="Pass" checked={decision === 'Pass'} onChange={e => setDecision(e.target.value)} disabled={isReadOnly} required /> Pass
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: isReadOnly ? 'default' : 'pointer' }}>
-                  <input type="radio" name="decision" value="Fail" checked={decision === 'Fail'} onChange={e => setDecision(e.target.value)} disabled={isReadOnly} required /> Fail
-                </label>
+                <label><input type="radio" value="Pass" checked={decision === 'Pass'} onChange={e => setDecision(e.target.value)} required /> Pass</label>
+                <label><input type="radio" value="Fail" checked={decision === 'Fail'} onChange={e => setDecision(e.target.value)} required /> Fail</label>
               </div>
             </div>
 
-            {decision === 'Pass' && !isReadOnly && (
-              <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', padding: 24, borderRadius: 'var(--radius-sm)', marginTop: 24 }}>
-                <strong style={{ color: '#047857', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}><Check size={18} /> Project Creation Config</strong>
+            {decision === 'Pass' && (
+              <div style={{ background: 'var(--green-glow)', padding: 16, borderRadius: 8 }}>
                 <div className="grid-2">
                   <Select label="Assign AM *" value={am} onChange={e => setAm(e.target.value)} required>
-                    <option value="">Unassigned</option>
+                    <option value="">Select AM</option>
                     {staff.ams.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
                   </Select>
                   <Select label="Assign PM *" value={pm} onChange={e => setPm(e.target.value)} required>
-                    <option value="">Unassigned</option>
-                    {staff.pms
-                      .filter(s => {
-                        if (!am) return true;
-                        const selectedAm = staff.ams.find(a => a.name === am);
-                        return selectedAm ? s.team === selectedAm.team : true;
-                      })
-                      .map(s => <option key={s.name} value={s.name}>{s.name}</option>)
-                    }
+                    <option value="">Select PM</option>
+                    {staff.pms.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
                   </Select>
                 </div>
               </div>
             )}
 
-            {!isReadOnly && (
-              <Button full variant="primary" size="lg" type="submit" loading={actioning} style={{ background: '#10b981', borderColor: '#059669', marginTop: 32 }}>
-                Submit
-              </Button>
-            )}
+            <Button full variant="dark" type="submit" loading={actioning}>Finalize Audit</Button>
           </form>
           )}
         </div>

@@ -153,6 +153,50 @@ export const notifyProjectAssigned = async ({ clientName, amName, pmName, assign
       type: 'info'
    });
 };
+ 
+/**
+ * Trigger Event: New Onboarding Submitted (AM/PM)
+ */
+export const notifyOnboardingSubmitted = async (clientName, amPmName) => {
+   const ids = await getIdsForRolesOrNames({ roles: ['qa', 'ceo'] });
+   await notifyUsers(ids, {
+      title: 'New Onboarding Ready for Audit',
+      message: `${amPmName} submitted a new onboarding for ${clientName}.`,
+      type: 'info',
+      link: null
+   });
+};
+
+/**
+ * Trigger Event: Onboarding Passed (AM/PM)
+ */
+export const notifyOnboardingPassed = async ({ clientName, amPmName, teamName }) => {
+   const ids = await getIdsForRolesOrNames({ 
+      roles: ['ceo', 'manager'],
+      names: [amPmName].filter(Boolean),
+      team: teamName
+   });
+   const uniqueIds = [...new Set(ids)];
+   await notifyUsers(uniqueIds, {
+      title: 'Onboarding Approved',
+      message: `QA passed the onboarding for ${clientName}. Project is now active.`,
+      type: 'success'
+   });
+};
+
+/**
+ * Trigger Event: Onboarding Failed (AM/PM)
+ */
+export const notifyOnboardingFailed = async ({ clientName, amPmName }) => {
+   const ids = await getIdsForRolesOrNames({ 
+      names: [amPmName].filter(Boolean)
+   });
+   await notifyUsers([...new Set(ids)], {
+      title: 'Onboarding Audit Failed',
+      message: `QA rejected the onboarding for ${clientName}. Please review the notes.`,
+      type: 'error'
+   });
+};
 
 /**
  * Trigger Event: Reactivation Requested

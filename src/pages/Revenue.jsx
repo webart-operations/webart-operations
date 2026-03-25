@@ -97,9 +97,14 @@ export default function RevenueView({ setActiveTab, appSettings }) {
     }));
   }, [submissions]);
 
-  const filteredPayments = payments.filter(p => 
-    p.projects?.client_name?.toLowerCase().includes(search.toLowerCase())
-  );
+  const filteredPayments = payments.filter(p => {
+    // If no search, show everything
+    if (!search) return true;
+    
+    // Safer check to prevent crashes if projects relation is null
+    const clientName = p.projects?.client_name || p.client_name || '';
+    return clientName.toLowerCase().includes(search.toLowerCase());
+  });
 
   return (
     <div className="space-y-6">

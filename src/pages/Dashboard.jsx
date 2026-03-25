@@ -182,7 +182,8 @@ export default function DashboardView({ setActiveTab, appSettings }) {
       // AM/PM Map (Collected Revenue)
       (rev || []).forEach(r => {
          const val = Number(r.amount_usd || 0);
-         const logger = r.collected_by || r.logged_by || 'Unknown';
+         // Prioritize collected_by (AM/PM). If missing for onboarding, show as Unknown.
+         const logger = r.collected_by || (r.payment_type === 'Onboarding' ? 'Unknown' : (r.logged_by || 'Unknown'));
          if (!amPmMap[logger]) amPmMap[logger] = { name: logger, count: 0, collected: 0 };
          amPmMap[logger].count++; // number of payment logs
          amPmMap[logger].collected += val;
