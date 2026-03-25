@@ -45,7 +45,8 @@ export default function DashboardView({ setActiveTab, appSettings }) {
   const calculateStats = (allSubs, allProjs, rev, queueCount) => {
     // 1. Revenue
     const collected = (rev || []).reduce((s, r) => s + Number(r.amount_usd || 0), 0);
-    const passedSubs = allSubs.filter(s => s.status === 'passed');
+    // Sales Revenue is strictly Sales Form submissions (excluding onboarding and am/pm reactivations)
+    const passedSubs = allSubs.filter(s => s.status === 'passed' && !s.is_onboarding && !s.is_reactivation); 
     const totalNet = passedSubs.reduce((sum, s) => sum + Number(s.usd_net || s.net || 0), 0);
     const totalGross = passedSubs.reduce((sum, s) => sum + Number(s.usd_gross || s.gross || 0), 0);
     
@@ -159,8 +160,8 @@ export default function DashboardView({ setActiveTab, appSettings }) {
 
           if (s.status !== 'passed') return;
           
-          // CRITICAL: Onboarding revenue belongs to AM/PM (Collections), not Sales Performance
-          if (s.is_onboarding) return;
+          // CRITICAL: Onboarding and Reactivations belong to AM/PM (Collections), not Sales Performance
+          if (s.is_onboarding || s.is_reactivation) return;
 
           const netVal = Number(s.usd_net || s.net || 0);
           const effRep = s.rep;

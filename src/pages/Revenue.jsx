@@ -59,19 +59,18 @@ export default function RevenueView({ setActiveTab, appSettings }) {
     return { total_paid: paid, balance: 0, count: payments.length };
   }, [payments]);
 
-  // Sales analytics from submissions
-  const passedSubs = submissions.filter(s => s.status === 'passed');
+  // Sales revenue is strictly Sales Form submissions (Exclude onboarding and reactivations)
+  const passedSubs = submissions.filter(s => s.status === 'passed' && !s.is_onboarding && !s.is_reactivation);
   const totalNetValue = passedSubs.reduce((sum, s) => sum + Number(s.usd_net || s.net || 0), 0);
 
   // By rep
   const repData = useMemo(() => {
     const map = {};
     submissions.forEach(s => {
-      // Exclude Onboarding (AM/PM revenue) and AM/PM reactivations
-      if (s.is_onboarding) return;
-      if (s.is_reactivation && !(appSettings?.sales_reps || []).includes(s.closer)) return;
+      // Exclude Onboarding (AM/PM) and Reactivations (AM/PM) from Sales Rep metrics
+      if (s.is_onboarding || s.is_reactivation) return;
       
-      const effRep = s.is_reactivation ? s.closer : s.rep;
+      const effRep = s.rep;
       if (!effRep) return;
 
       if (!map[effRep]) map[effRep] = { rep: effRep, total: 0, passed: 0, net: 0 };
@@ -166,7 +165,7 @@ export default function RevenueView({ setActiveTab, appSettings }) {
                       <td>{new Date(p.payment_date).toLocaleDateString()}</td>
                       <td>
                         <div style={{ fontWeight: 600 }}>{p.projects?.client_name || 'N/A'}</div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-3)' }}>{p.projects?.product}</div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-3)' }}>{p.product || p.projects?.product}</div>
                       </td>
                       <td>
                        <div style={{ fontWeight: 700 }}>$ {Number(p.amount_usd || p.amount_paid || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
@@ -189,8 +188,8 @@ export default function RevenueView({ setActiveTab, appSettings }) {
       {activeSection === 'sales' && ability('view_sales_data') && (
         <>
           <div className="grid-stat">
-             <Card flush><div style={{ padding: 16 }}><div style={{ fontSize: '0.6875rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-3)' }}>Passed Audits</div><h4 style={{ fontSize: '1.75rem', fontWeight: 900, color: 'var(--green)' }}>{passedSubs.length}</h4></div></Card>
-             <Card flush><div style={{ padding: 16 }}><div style={{ fontSize: '0.6875rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-3)' }}>Total Net (Passed)</div><h4 style={{ fontSize: '1.75rem', fontWeight: 900, color: 'var(--accent)' }}>{formatUSD(totalNetValue)}</h4></div></Card>
+             <Card flush><div style={{ padding: 16 }}><div style={{ fontSize: '0.6875rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-3)' }}>Passed Audits (Sales)</div><h4 style={{ fontSize: '1.75rem', fontWeight: 900, color: 'var(--green)' }}>{passedSubs.length}</h4></div></Card>
+             <Card flush><div style={{ padding: 16 }}><div style={{ fontSize: '0.6875rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-3)' }}>Total Net (Sales)</div><h4 style={{ fontSize: '1.75rem', fontWeight: 900, color: 'var(--accent)' }}>{formatUSD(totalNetValue)}</h4></div></Card>
           </div>
 
           <div className="grid-2">
