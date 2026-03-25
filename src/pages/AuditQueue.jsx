@@ -8,7 +8,6 @@ import {
   notifyOnboardingPassed, notifyOnboardingFailed 
 } from '../lib/notifications';
 import { Button, Card, Pill, Spinner, Select, Field } from '../components/ui';
-
 export default function AuditQueueView({ appSettings }) {
   const { profile } = useAuth();
   const [queue, setQueue] = useState([]);
@@ -16,10 +15,8 @@ export default function AuditQueueView({ appSettings }) {
   const [loading, setLoading] = useState(true);
   const [activeSubTab, setActiveSubTab] = useState('pending');
   const [staff, setStaff] = useState({ ams: [], pms: [], qas: [] });
-
   // Modal states
   const [auditModal, setAuditModal] = useState(null);
-
   const loadData = async () => {
     setLoading(true);
     const { data: pendingData } = await supabase.from('submissions').select('*').eq('status', 'pending').order('created_at');
@@ -28,7 +25,6 @@ export default function AuditQueueView({ appSettings }) {
     setCompleted(completedData || []);
     setLoading(false);
   };
-
   useEffect(() => {
     loadData();
     supabase.from('profiles').select('full_name, role, team').eq('status', 'active')
@@ -40,7 +36,6 @@ export default function AuditQueueView({ appSettings }) {
         });
       });
   }, []);
-
   return (
     <div className="space-y-6">
       <div className="page-header">
@@ -49,7 +44,6 @@ export default function AuditQueueView({ appSettings }) {
           <p className="page-subtitle">Process incoming sales/onboardings and review historical records.</p>
         </div>
       </div>
-
       <div className="tabs">
         <button className={`tab ${activeSubTab === 'pending' ? 'active' : ''}`} onClick={() => setActiveSubTab('pending')}>
           Pending Queue ({queue.length})
@@ -58,7 +52,6 @@ export default function AuditQueueView({ appSettings }) {
           Completed Audits
         </button>
       </div>
-
       <Card flush>
         <div style={{ overflowX: 'auto' }}>
           <table className="table">
@@ -109,7 +102,6 @@ export default function AuditQueueView({ appSettings }) {
           </table>
         </div>
       </Card>
-
       {auditModal && (
         <AuditFormModal 
           submission={auditModal} 
@@ -122,7 +114,6 @@ export default function AuditQueueView({ appSettings }) {
     </div>
   );
 }
-
 function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
   const isReadOnly = submission.status !== 'pending';
   const [actioning, setActioning] = useState(false);
@@ -140,34 +131,28 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
   const [pm, setPm] = useState('');
   
   const [auditData, setAuditData] = useState(null);
-
   useEffect(() => {
     if (isReadOnly) {
        supabase.from('qa_audits').select('*').eq('submission_id', submission.id).maybeSingle()
          .then(({ data }) => setAuditData(data));
     }
   }, [isReadOnly, submission.id]);
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (actioning) return;
     setActioning(true);
-
     const { data: currentSub } = await supabase.from('submissions').select('status, client_id').eq('id', submission.id).single();
     if (currentSub?.status !== 'pending') {
       alert("This submission has already been processed.");
       setActioning(false);
       return onComplete();
     }
-
     const isPassing = decision === 'Pass';
     const finalStatus = isPassing ? 'passed' : 'failed';
     const businessName = submission.business_name || submission.client_name;
-
     const { error: subErr } = await supabase.from('submissions').update({
       status: finalStatus
     }).eq('id', submission.id);
-
     await supabase.from('qa_audits').insert({
       submission_id: submission.id,
       auditor_id: profile.id,
@@ -182,7 +167,6 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
       assigned_am: am,
       assigned_pm: pm
     });
-
     if (finalStatus === 'failed') {
       if (submission.is_onboarding) {
         await notifyOnboardingFailed({ clientName: businessName, amPmName: submission.collected_by });
@@ -191,17 +175,14 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
       }
       await triggerGHLWebhook('sale_failed_audit', { ...submission, audited_by: auditor });
     }
-
     if (finalStatus === 'passed') {
       let mClientId = currentSub.client_id;
       const assignedTeam = staff.ams.find(a => a.name === am)?.team || staff.pms.find(p => p.name === pm)?.team || 'N/A';
-
       if (!mClientId) {
           const { data: existingC } = await supabase.from('clients')
             .select('id')
             .or(`email.eq.${submission.email},business_name.eq.${businessName}`)
             .maybeSingle();
-
           if (existingC) {
              mClientId = existingC.id;
           } else {
@@ -243,7 +224,6 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
             mProjectId = newProj.id;
         }
       }
-
       let newServiceId = null;
       const { data: newService } = await supabase.from('project_services').insert({
           project_id: mProjectId,
@@ -254,12 +234,11 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
           status: 'active'
       }).select().single();
       if (newService) newServiceId = newService.id;
-
       if (mProjectId) await supabase.from('submissions').update({ project_id: mProjectId, client_id: mClientId }).eq('id', submission.id);
-
       if (submission.is_onboarding) {
         const { error: revErr } = await supabase.from('revenue_ledger').insert({
             project_id: mProjectId,
+            service_id: newServiceId, // Link the correct service
             client_id: mClientId,
             client_name: businessName,
             amount_usd: submission.usd_net || submission.net,
@@ -274,9 +253,11 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
             is_onboarding: true,
             locked: true
         });
-        if (revErr) console.error("Onboarding Revenue Error:", revErr);
+        if (revErr) {
+           console.error("Onboarding Revenue Error:", revErr);
+           alert("CRITICAL ERROR: Failed to log revenue. Please contact admin. " + revErr.message);
+        }
       }
-
       const notifyPayload = { clientName: businessName, repName: submission.rep, closerName: submission.closer, amName: am, pmName: pm, teamName: assignedTeam, projectId: mProjectId };
       
       if (submission.is_onboarding) {
@@ -286,11 +267,9 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
       }
       await triggerGHLWebhook('sale_passed_audit', notifyPayload);
     }
-
     setActioning(false);
     onComplete();
   };
-
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 840 }}>
@@ -313,7 +292,6 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
                        <Pill status={auditData.decision === 'Pass' ? 'passed' : 'failed'} />
                     </div>
                  </div>
-
                  <div className="grid-2">
                     <Card title="Sales Context">
                        <div className="space-y-3" style={{ fontSize: '0.875rem' }}>
@@ -321,6 +299,10 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
                           <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-3)' }}>Representative</span> <strong>{submission.rep}</strong></div>
                           <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-3)' }}>Gross</span> <strong>{submission.currency} {submission.gross}</strong></div>
                           <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-3)' }}>Report Link</span> {auditData.audit_report_url ? <a href={auditData.audit_report_url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>View Document</a> : '—'}</div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-3)' }}>Recording</span> {auditData.recording_url ? <a href={auditData.recording_url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>Listen to Call</a> : '—'}</div>
+                          <hr style={{ margin: '12px 0', border: 'none', borderTop: '1px solid var(--border)' }} />
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-3)' }}>Assigned AM</span> <strong>{auditData.assigned_am || '—'}</strong></div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text-3)' }}>Assigned PM</span> <strong>{auditData.assigned_pm || '—'}</strong></div>
                        </div>
                     </Card>
                     
@@ -337,7 +319,6 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
                        </div>
                     </Card>
                  </div>
-
                  <Card title="Notes">
                     <div style={{ fontSize: '0.875rem', whiteSpace: 'pre-wrap' }}>{auditData.notes || 'No notes.'}</div>
                  </Card>
@@ -351,7 +332,6 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
                 <div><strong>Rep/Collector:</strong> {submission.rep}</div>
               </div>
             </div>
-
             <Field label="Client Name" value={submission.client_name} disabled />
             
             <div className="grid-2">
@@ -361,7 +341,6 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
               </Select>
               <Field label="Date *" type="date" value={qaDate} onChange={e => setQaDate(e.target.value)} required />
             </div>
-
             <Select label="Score *" value={score} onChange={e => setScore(e.target.value)} required>
               <option value="">Select Score</option>
               <option value="Excellent (10/10)">Excellent (10/10)</option>
@@ -369,7 +348,6 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
               <option value="Average (5/10)">Average (5/10)</option>
               <option value="Poor (2/10)">Poor (2/10)</option>
             </Select>
-
             <div className="field">
               <label className="label">Commitments Verified *</label>
               <div style={{ display: 'flex', gap: 16 }}>
@@ -377,8 +355,8 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
                 <label><input type="radio" value="No" checked={commitments === 'No'} onChange={e => setCommitments(e.target.value)} required /> No</label>
               </div>
             </div>
-
             <Field label="QA Notes *" textarea rows={3} value={notes} onChange={e => setNotes(e.target.value)} required />
+            <Field label="Audit Report Link" placeholder="Paste link to document (e.g. Google Drive)" value={reportUrl} onChange={e => setReportUrl(e.target.value)} />
             <Field label="Recording Link *" value={recording} onChange={e => setRecording(e.target.value)} required />
             
             <div className="field">
@@ -388,22 +366,27 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
                 <label><input type="radio" value="Fail" checked={decision === 'Fail'} onChange={e => setDecision(e.target.value)} required /> Fail</label>
               </div>
             </div>
-
             {decision === 'Pass' && (
               <div style={{ background: 'var(--green-glow)', padding: 16, borderRadius: 8 }}>
                 <div className="grid-2">
-                  <Select label="Assign AM *" value={am} onChange={e => setAm(e.target.value)} required>
+                  <Select label="Assign AM *" value={am} onChange={e => { setAm(e.target.value); setPm(''); }} required>
                     <option value="">Select AM</option>
-                    {staff.ams.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+                    {staff.ams.map(s => <option key={s.name} value={s.name}>{s.name} ({s.team})</option>)}
                   </Select>
                   <Select label="Assign PM *" value={pm} onChange={e => setPm(e.target.value)} required>
                     <option value="">Select PM</option>
-                    {staff.pms.map(s => <option key={s.name} value={s.name}>{s.name}</option>)}
+                    {staff.pms
+                      .filter(s => {
+                        if (!am) return true;
+                        const selectedAm = staff.ams.find(a => a.name === am);
+                        return selectedAm ? s.team === selectedAm.team : true;
+                      })
+                      .map(s => <option key={s.name} value={s.name}>{s.name} ({s.team})</option>)
+                    }
                   </Select>
                 </div>
               </div>
             )}
-
             <Button full variant="dark" type="submit" loading={actioning}>Finalize Audit</Button>
           </form>
           )}
