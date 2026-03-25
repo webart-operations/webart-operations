@@ -4,10 +4,8 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import { formatUSD } from '../lib/currency';
 import { Card, Pill, Select, MiniBarChart } from '../components/ui';
-
 export default function DashboardView({ setActiveTab, appSettings }) {
   const { profile, ability, role } = useAuth();
-
   const [dateFilter, setDateFilter] = useState('all'); // all, 30days, month, ytd, custom
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
@@ -15,7 +13,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
   // Phase 17 Role Filter state
   const [roleFilter, setRoleFilter] = useState({ sales: 'all', closer: 'all', am: 'all', pm: 'all' });
   const [staffList, setStaffList] = useState({ ams: [], pms: [] });
-
   const [stats, setStats] = useState({ 
     projects: 0, collected: 0, queue: 0, atRisk: 0, 
     onHold: 0, delivered: 0,
@@ -32,7 +29,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
   const [monthData, setMonthData] = useState([]);
   
   const [loading, setLoading] = useState(true);
-
   const getDateRange = () => {
     const now = new Date();
     if (dateFilter === 'custom') return { start: customStart || null, end: customEnd || null };
@@ -41,7 +37,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
     if (dateFilter === 'ytd') return { start: new Date(now.getFullYear(), 0, 1).toISOString(), end: null };
     return { start: null, end: null };
   };
-
   const calculateStats = (allSubs, allProjs, rev, queueCount) => {
     // 1. Revenue
     const collected = (rev || []).reduce((s, r) => s + Number(r.amount_usd || 0), 0);
@@ -52,7 +47,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
     
     // "Total Revenue" = Total Net Sales + Collected AM/PM Revenue
     const totalRevenue = totalNet + collected;
-
     // 2. Projects
     const activeProjsData = (allProjs || []).filter(p => ['active', 'at_risk'].includes(p.status));
     const onHoldProjs = (allProjs || []).filter(p => p.status === 'on_hold');
@@ -64,7 +58,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
        return { ...p, inactiveDays: days };
     });
     const critical = riskAssessed.filter(p => p.inactiveDays > 15 || p.status === 'at_risk').sort((a,b) => b.inactiveDays - a.inactiveDays);
-
     return {
       projects: activeProjsData.length,
       collected,
@@ -80,7 +73,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
       criticalList: critical.slice(0, 5)
     };
   };
-
   const loadData = async () => {
     if (!profile) return;
     const { start: minDate, end: maxDate } = getDateRange();
@@ -93,34 +85,28 @@ export default function DashboardView({ setActiveTab, appSettings }) {
          pms: profiles.filter(p => ['pm', 'manager', 'ceo'].includes(p.role)).map(p => p.full_name)
        });
     }
-
     // 1. PROJECTS
     let projQuery = supabase.from('projects').select('id, status, client_name, last_communication_date, created_at, team, assigned_am, assigned_pm, closer');
     if (role === 'manager') projQuery = projQuery.eq('team', profile.team);
     else if (role === 'am') projQuery = projQuery.eq('assigned_am', profile.full_name);
     else if (role === 'pm') projQuery = projQuery.eq('assigned_pm', profile.full_name);
-
     if (roleFilter.am !== 'all') projQuery = projQuery.eq('assigned_am', roleFilter.am);
     if (roleFilter.pm !== 'all') projQuery = projQuery.eq('assigned_pm', roleFilter.pm);
     if (roleFilter.closer !== 'all') projQuery = projQuery.eq('closer', roleFilter.closer);
-
     // 2. REVENUE
-    let revQuery = supabase.from('revenue_ledger').select('amount_usd, logged_by, payment_date');
+    let revQuery = supabase.from('revenue_ledger').select('*');
     if (minDate) revQuery = revQuery.gte('payment_date', minDate);
     if (maxDate) revQuery = revQuery.lte('payment_date', maxDate);
     if (role === 'sales') revQuery = revQuery.eq('logged_by_id', profile.id);
-
     // 3. SUBMISSIONS
     let subsQuery = supabase.from('submissions').select('*').order('sale_date');
     if (minDate) subsQuery = subsQuery.gte('sale_date', minDate);
     if (maxDate) subsQuery = subsQuery.lte('sale_date', maxDate);
     if (role === 'manager') subsQuery = subsQuery.eq('team', profile.team);
-
     if (roleFilter.sales !== 'all') subsQuery = subsQuery.eq('rep', roleFilter.sales);
     if (roleFilter.closer !== 'all') subsQuery = subsQuery.eq('closer', roleFilter.closer);
     if (roleFilter.am !== 'all') subsQuery = subsQuery.eq('assigned_am', roleFilter.am);
     if (roleFilter.pm !== 'all') subsQuery = subsQuery.eq('assigned_pm', roleFilter.pm);
-
     const [
       { data: projs },
       { data: rev },
@@ -132,22 +118,18 @@ export default function DashboardView({ setActiveTab, appSettings }) {
       subsQuery,
       ability('view_qa_queue') ? supabase.from('submissions').select('id', { count: 'exact', head: true }).eq('status', 'pending') : Promise.resolve({ count: 0 })
     ]);
-
     const filteredSubs = (role === 'sales' && !ability('view_all_sales')) 
       ? (subs || []).filter(s => s.rep === profile.full_name) 
       : (subs || []);
-
     const res = calculateStats(filteredSubs, projs, rev, qCount);
     setStats(res);
     setCriticalProjects(res.criticalList);
-
     // 4. PERFORMANCE GRIDS & CHARTS
     if (role !== 'sales') {
       const salesMap = {};
       const closerMap = {};
       const amPmMap = {};
       const monthMap = {};
-
       // Sales & Closer Maps
       filteredSubs.forEach(s => {
          // Monthly Net Chart (only passed audits)
@@ -157,12 +139,10 @@ export default function DashboardView({ setActiveTab, appSettings }) {
             monthMap[month].count++;
             monthMap[month].net += Number(s.usd_net || s.net || 0);
          }
-
           if (s.status !== 'passed') return;
           
           // CRITICAL: Onboarding and Reactivations belong to AM/PM (Collections), not Sales Performance
           if (s.is_onboarding || s.is_reactivation) return;
-
           const netVal = Number(s.usd_net || s.net || 0);
           const effRep = s.rep;
           
@@ -178,7 +158,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
             closerMap[s.closer].net += netVal;
          }
       });
-
       // AM/PM Map (Collected Revenue)
       (rev || []).forEach(r => {
          const val = Number(r.amount_usd || 0);
@@ -188,7 +167,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
          amPmMap[logger].count++; // number of payment logs
          amPmMap[logger].collected += val;
       });
-
       const processedMonthData = Object.values(monthMap)
         .sort((a, b) => a.month.localeCompare(b.month))
         .slice(-12)
@@ -196,7 +174,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
           ...m,
           label: new Date(m.month + '-01').toLocaleDateString('en', { month: 'short', year: '2-digit' })
         }));
-
       setMonthData(processedMonthData);
       setSalesPerf(Object.values(salesMap).sort((a,b) => b.net - a.net));
       setCloserPerf(Object.values(closerMap).sort((a,b) => b.net - a.net));
@@ -204,7 +181,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
     }
     setLoading(false);
   };
-
   useEffect(() => {
     loadData();
     const ch = supabase.channel('dashboard_sync')
@@ -214,7 +190,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
       .subscribe();
     return () => supabase.removeChannel(ch);
   }, [profile, ability, role, dateFilter, customStart, customEnd, roleFilter]);
-
   const topCards = [
     ...(role !== 'sales' ? [
       { label: role === 'ceo' || role === 'qa' ? 'Active Projects' : 'My Active Projects', value: stats.projects, icon: Layers, color: 'text-blue-600' },
@@ -235,12 +210,9 @@ export default function DashboardView({ setActiveTab, appSettings }) {
     ...(role === 'ceo' || role === 'qa' || role === 'manager' ? [
       { label: 'Total Collection', value: formatUSD(stats.totalRevenue), icon: DollarSign, color: 'text-emerald-600' },
     ] : []),
-
     ...(ability('view_qa_queue') ? [{ label: 'Audit Queue', value: stats.queue, icon: Activity, color: stats.queue > 0 ? 'text-amber-600' : '' }] : []),
   ];
-
   const updateRoleFilter = (key, val) => setRoleFilter(prev => ({ ...prev, [key]: val }));
-
   return (
     <div className="space-y-6 pb-12">
       <div className="page-header" style={{ marginBottom: 16 }}>
@@ -275,7 +247,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
           )}
         </div>
       </div>
-
       {/* Role Analytics Filters */}
       {role !== 'sales' && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', padding: '16px', background: '#fff', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
@@ -298,7 +269,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
           </Select>
         </div>
       )}
-
       <div className="grid-stat">
         {topCards.map((c, i) => {
           const Icon = c.icon;
@@ -317,7 +287,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
           );
         })}
       </div>
-
       {/* Role-based performance grids */}
       {(role === 'ceo' || role === 'qa' || role === 'manager') && (
         <>
@@ -343,7 +312,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
               }
             </Card>
           </div>
-
           <div className="grid-2" style={{ marginBottom: 24 }}>
             <Card title="🏆 Top 3 Sales Reps" flush>
               <div style={{ overflowX: 'auto' }}>
@@ -362,7 +330,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
                 </table>
               </div>
             </Card>
-
             <Card title="⚠️ Needs Improvement (Bottom 3 Reps)" flush>
               <div style={{ overflowX: 'auto' }}>
                 <table className="table">
@@ -381,7 +348,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
               </div>
             </Card>
           </div>
-
           <div className="grid-2">
             <Card title="🤝 Closer Performance" flush>
               <div style={{ overflowX: 'auto' }}>
@@ -400,7 +366,6 @@ export default function DashboardView({ setActiveTab, appSettings }) {
                 </table>
               </div>
             </Card>
-
             <Card title="💼 AM / PM Performance (Collections)" flush>
               <div style={{ overflowX: 'auto' }}>
                 <table className="table">
