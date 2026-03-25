@@ -195,7 +195,7 @@ export default function ProjectDetailView({ projectId, setActiveTab, appSettings
             </Card>
           </div>
 
-          <Card title="Active Services" extra={<Button size="xs" variant="outline" onClick={() => setServiceModal(true)}><Plus size={14} /> Add Service</Button>}>
+          <Card title="Active Services" extra={<Button size="xs" variant="outline" onClick={() => setActiveTab('log-payment')}><Plus size={14} /> Add Service</Button>}>
              <div className="space-y-3">
                 {services.length === 0 ? <p className="text-muted text-center py-4">No services logged.</p>
                 : services.map(s => (

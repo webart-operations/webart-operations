@@ -158,6 +158,10 @@ export default function DashboardView({ setActiveTab, appSettings }) {
          }
 
           if (s.status !== 'passed') return;
+          
+          // CRITICAL: Onboarding revenue belongs to AM/PM (Collections), not Sales Performance
+          if (s.is_onboarding) return;
+
           const netVal = Number(s.usd_net || s.net || 0);
           const effRep = s.rep;
           

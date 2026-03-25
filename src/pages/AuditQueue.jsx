@@ -194,27 +194,29 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
 
     if (finalStatus === 'passed') {
       let mClientId = currentSub.client_id;
+      const businessName = submission.business_name || submission.client_name;
+
       if (!mClientId) {
-          // Robust client matching: strictly Business Name or Email or Phone
+          // 1. HARDENED CLIENT MATCHING: Check by Email or exact Business Name
           const { data: existingC } = await supabase.from('clients')
-            .select('id, client_name, business_name')
-            .or(`email.ilike.${submission.email},business_name.ilike.${submission.business_name || submission.client_name}`)
+            .select('id')
+            .or(`email.eq.${submission.email},business_name.eq.${businessName}`)
             .maybeSingle();
 
           if (existingC) {
              mClientId = existingC.id;
-             console.log("Matched existing client:", mClientId);
+             console.log("Matched existing client during audit:", mClientId);
           } else {
             const assignedTeam = staff.ams.find(a => a.name === am)?.team || staff.pms.find(p => p.name === pm)?.team || 'N/A';
             const { data: newC, error: clientErr } = await supabase.from('clients').insert({
               client_name: submission.client_name, 
-              business_name: submission.business_name || submission.client_name,
+              business_name: businessName,
               phone: submission.phone, 
               email: submission.email, 
               website: submission.website,
               address: submission.address, 
               country: submission.country, 
-              source: 'sales_form',
+              source: 'onboarding',
               team: assignedTeam
             }).select().single();
             if (clientErr) console.error("Client Creation Error:", clientErr);
@@ -224,22 +226,21 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
       
       const assignedTeam = staff.ams.find(a => a.name === am)?.team || staff.pms.find(p => p.name === pm)?.team || 'N/A';
       
-      // 1. PROJECT LEVEL: Ensure a project exists for this client (named after Business Name)
-      const projectTitle = submission.business_name || submission.client_name;
+      // 2. HARDENED PROJECT MATCHING: Check if project already exists for this client
       let mProjectId = null;
-      
       const { data: existingProj } = await supabase.from('projects')
         .select('id')
         .eq('client_id', mClientId)
-        .eq('client_name', projectTitle)
+        .eq('client_name', businessName)
         .maybeSingle();
         
       if (existingProj) {
         mProjectId = existingProj.id;
+        console.log("Matched existing project during audit:", mProjectId);
       } else {
         const { data: newProj, error: projErr } = await supabase.from('projects').insert({
             client_id: mClientId, 
-            client_name: projectTitle,
+            client_name: businessName,
             assigned_am: am, 
             assigned_pm: pm,
             status: 'active',
@@ -249,40 +250,60 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
         if (newProj) mProjectId = newProj.id;
       }
 
-      // 2. SERVICE LEVEL: Create the specific service entry
+      // 3. HARDENED SERVICE MATCHING: Check if this service is already logged for this project today (to prevent duplicates)
       let newServiceId = null;
-      const { data: newService, error: serviceErr } = await supabase.from('project_services').insert({
-          project_id: mProjectId,
-          service_name: submission.product,
-          gross_value: submission.gross,
-          net_value: submission.net,
-          currency: submission.currency || 'USD',
-          status: 'active'
-      }).select().single();
+      const { data: existingService } = await supabase.from('project_services')
+        .select('id')
+        .eq('project_id', mProjectId)
+        .eq('service_name', submission.product)
+        .eq('net_value', submission.net)
+        .gte('created_at', new Date().toISOString().split('T')[0])
+        .maybeSingle();
 
-      if (serviceErr) console.error("Service Creation Error:", serviceErr);
-      if (newService) newServiceId = newService.id;
+      if (existingService) {
+        newServiceId = existingService.id;
+        console.log("Matched existing service during audit:", newServiceId);
+      } else {
+        const { data: newService, error: serviceErr } = await supabase.from('project_services').insert({
+            project_id: mProjectId,
+            service_name: submission.product,
+            gross_value: submission.gross,
+            net_value: submission.net,
+            currency: submission.currency || 'USD',
+            status: 'active'
+        }).select().single();
+        if (serviceErr) console.error("Service Creation Error:", serviceErr);
+        if (newService) newServiceId = newService.id;
+      }
 
       if (mProjectId) await supabase.from('submissions').update({ project_id: mProjectId, client_id: mClientId }).eq('id', submission.id);
 
-      // 3. REVENUE LEVEL: If it's an onboarding submission, log the initial revenue
+      // 4. REVENUE LEVEL: Log onboarding revenue if applicable, with duplicate check
       if (submission.is_onboarding) {
-        await supabase.from('revenue_ledger').insert({
-          project_id: mProjectId,
-          client_id: mClientId,
-          client_name: projectTitle,
-          logged_by: profile.full_name,
-          logged_by_id: profile.id,
-          collected_by: submission.collected_by,
-          currency: submission.currency || 'USD',
-          original_amount: Number(submission.net || 0),
-          amount_usd: Number(submission.usd_net || submission.net || 0),
-          payment_date: submission.sale_date,
-          payment_type: 'Onboarding',
-          product: submission.product,
-          service_id: newServiceId,
-          notes: 'Automatic collection from onboarding audit pass'
-        });
+        const { data: existingLedger } = await supabase.from('revenue_ledger')
+          .select('id')
+          .eq('project_id', mProjectId)
+          .eq('service_id', newServiceId)
+          .maybeSingle();
+
+        if (!existingLedger) {
+          await supabase.from('revenue_ledger').insert({
+            project_id: mProjectId,
+            client_id: mClientId,
+            client_name: businessName,
+            logged_by: profile.full_name,
+            logged_by_id: profile.id,
+            collected_by: submission.collected_by,
+            currency: submission.currency || 'USD',
+            original_amount: Number(submission.net || 0),
+            amount_usd: Number(submission.usd_net || submission.net || 0),
+            payment_date: submission.sale_date,
+            payment_type: 'Onboarding',
+            product: submission.product,
+            service_id: newServiceId,
+            notes: 'Verified Onboarding Revenue'
+          });
+        }
       }
       
       await triggerGHLWebhook('sale_passed_audit', { ...submission, assigned_am: am, assigned_pm: pm });

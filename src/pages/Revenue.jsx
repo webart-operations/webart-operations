@@ -67,7 +67,8 @@ export default function RevenueView({ setActiveTab, appSettings }) {
   const repData = useMemo(() => {
     const map = {};
     submissions.forEach(s => {
-      // Exclude AM/PM reactivations
+      // Exclude Onboarding (AM/PM revenue) and AM/PM reactivations
+      if (s.is_onboarding) return;
       if (s.is_reactivation && !(appSettings?.sales_reps || []).includes(s.closer)) return;
       
       const effRep = s.is_reactivation ? s.closer : s.rep;
