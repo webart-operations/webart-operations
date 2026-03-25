@@ -238,8 +238,7 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
       if (submission.is_onboarding) {
         const { error: revErr } = await supabase.from('revenue_ledger').insert({
             project_id: mProjectId,
-            service_id: newServiceId, // Link the correct service
-            client_id: mClientId,
+            service_id: newServiceId,
             client_name: businessName,
             amount_usd: submission.usd_net || submission.net,
             original_amount: submission.net,
@@ -250,7 +249,6 @@ function AuditFormModal({ submission, onClose, staff, profile, onComplete }) {
             payment_date: new Date().toISOString().split('T')[0],
             payment_type: 'Onboarding',
             product: submission.product,
-            is_onboarding: true,
             locked: true
         });
         if (revErr) {
